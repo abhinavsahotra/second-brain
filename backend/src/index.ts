@@ -12,9 +12,10 @@ import jwt from "jsonwebtoken"
 import bcrypt from "bcrypt"
 import dotenv from 'dotenv';
 
-import { ContentModel, UserModel } from "./db";
+import { ContentModel, LinkModel, UserModel } from "./db";
 import { contentSchema, signinSchema, signupSchema } from "./zod"
 import { userMiddleware } from "./userMiddleware";
+import { random } from "./utils";
 
 
 dotenv.config();
@@ -158,18 +159,73 @@ app.post("/api/v1/content", userMiddleware, async (req, res) => {
 });
 
 
-app.get("/api/v1/content", (req, res) => {
-    
+app.get("/api/v1/content", userMiddleware, async(req, res) => {
+  // get userId from the middleware
+  const userId = req.userId
+ 
+  // find content across the useId 
+  try{
+  const content = await ContentModel.find({ userId: userId }).populate("userId", "username");
+    res.json({
+      "content": content
+    })
+  }catch(e){
+    console.log(e);
+    return res.status(500).json({
+      "error": e
+    })
+  }
 })
 
-app.delete("/api/v1/content", (req, res) => {
-    
+app.delete("/api/v1/content", userMiddleware, async(req, res) => {
+    const contentId = req.body.contentId;
+
+    await ContentModel.deleteMany({ contentId, userId: req.userId });
+    res.json({ message: "Deleted" });
 })
 
-app.post("/api/v1/brain/share", (req, res) => {
-    
+app.post("/api/v1/brain/share", userMiddleware, async(req, res) => {
+    const { share } = req.body;
+    if (share) {
+        // Check if a link already exists for the user.
+        const existingLink = await LinkModel.findOne({ userId: req.userId });
+        if (existingLink) {
+            res.json({ hash: existingLink.hash }); // Send existing hash if found.
+            return;
+        }
+
+        // Generate a new hash for the shareable link.
+        const hash = random(10);
+        await LinkModel.create({ userId: req.userId, hash });
+        res.json({ hash }); // Send new hash in the response.
+    } else {
+        // Remove the shareable link if share is false.
+        await LinkModel.deleteOne({ userId: req.userId });
+        res.json({ message: "Removed link" }); // Send success response.
+    }
 })
 
-app.get("/api/v1/brain/:shareLink", (req, res) => {
-    
+app.get("/api/v1/brain/:shareLink", async(req, res) => {
+    const hash = req.params.shareLink;
+
+    // Find the link using the provided hash.
+    const link = await LinkModel.findOne({ hash });
+    if (!link) {
+        res.status(404).json({ message: "Invalid share link" }); 
+        return;
+    }
+
+    // Fetch content and user details for the shareable link.
+    const content = await ContentModel.find({ userId: link.userId });
+    const user = await UserModel.findOne({ _id: link.userId });
+
+    if (!user) {
+        res.status(404).json({ message: "User not found" }); 
+        return;
+    }
+
+    res.json({
+        username: user.username,
+        content
+    });
 })
